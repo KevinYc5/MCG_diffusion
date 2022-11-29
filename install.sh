@@ -3,7 +3,7 @@
 # 1. environment setting
 conda create -n MCG python=3.7
 conda activate MCG
-conda install pytorch==1.6.0 torchvision==0.7.0 cudatoolkit=10.2 -c pytorch
+pip3 install torch==1.9.0+cu111 torchvision==0.10.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
 pip install -r requirements.txt
 
 

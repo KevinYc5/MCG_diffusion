@@ -1,7 +1,18 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+try:
+    from torch import irfft
+    from torch import rfft
 
+except ImportError:
+    def rfft(x, d):
+        t = torch.fft.fft(x, dim = (-d))
+        r = torch.stack((t.real, t.imag), -1)
+        return r
+    def irfft(x, d):
+        t = torch.fft.ifft(torch.complex(x[...,0], x[...,1]), dim = (-d))
+        return t.real
 from .utils import PI, fftfreq
 
 '''source: https://github.com/matteo-ronchetti/torch-radon'''
@@ -19,8 +30,8 @@ class AbstractFilter(nn.Module):
         f = self._get_fourier_filter(padded_tensor.shape[2]).to(x.device)
         fourier_filter = self.create_filter(f)
         fourier_filter = fourier_filter.unsqueeze(-2)
-        projection = torch.rfft(padded_tensor.transpose(2,3), 1, onesided=False).transpose(2,3) * fourier_filter
-        return torch.irfft(projection.transpose(2,3), 1, onesided=False).transpose(2,3)[:,:,:input_size,:]
+        projection = rfft(padded_tensor.transpose(2,3), 1).transpose(2,3) * fourier_filter
+        return irfft(projection.transpose(2,3), 1).transpose(2,3)[:,:,:input_size,:]
 
     def _get_fourier_filter(self, size):
         n = torch.cat([
@@ -32,7 +43,7 @@ class AbstractFilter(nn.Module):
         f[0] = 0.25
         f[1::2] = -1 / (PI * n) ** 2
 
-        fourier_filter = torch.rfft(f, 1, onesided=False)
+        fourier_filter = rfft(f, 1)
         fourier_filter[:, 1] = fourier_filter[:, 0]
 
         return 2*fourier_filter
@@ -63,8 +74,8 @@ class LearnableFilter(AbstractFilter):
 
     def forward(self, x):
         fourier_filter = self.filter.unsqueeze(-1).repeat(1,1,2).to(x.device)
-        projection = torch.rfft(x.transpose(2,3), 1, onesided=False).transpose(2,3) * fourier_filter
-        return torch.irfft(projection.transpose(2,3), 1, onesided=False).transpose(2,3)
+        projection = rfft(x.transpose(2,3), 1).transpose(2,3) * fourier_filter
+        return irfft(projection.transpose(2,3), 1).transpose(2,3)
 
         # projection = torch.fft.rfft(x.transpose(2, 3), 1).transpose(2, 3) * fourier_filter
         # return torch.fft.irfft(projection.transpose(2, 3), 1).transpose(2, 3)
