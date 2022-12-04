@@ -12,3 +12,4 @@ ipdb
 tqdm
 blobfile
 mpi4py
+ninja
