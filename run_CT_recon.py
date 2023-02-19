@@ -23,10 +23,15 @@ import matplotlib.pyplot as plt
 ###############################################
 # Configurations
 ###############################################
-solver = 'MCG'
+# solver = 'MCG'
+# snr = 0.16 #MCG
+solver = 'song'
+snr = 0.246 #Song
+freq = 10
+
 config_name = 'AAPM_256_ncsnpp_continuous'
 sde = 'VESDE'
-num_scales = 2000
+num_scales = 1000
 ckpt_num = 185
 N = num_scales
 
@@ -52,7 +57,6 @@ elif schedule == 'linear':
 else:
     NotImplementedError(f"Given schedule {schedule} not implemented yet!")
 
-freq = 1
 
 if sde.lower() == 'vesde':
     from configs.ve import AAPM_256_ncsnpp_continuous as configs
@@ -68,7 +72,6 @@ config.training.batch_size = batch_size
 predictor = ReverseDiffusionPredictor
 corrector = LangevinCorrector
 probability_flow = False
-snr = 0.16
 n_steps = 1
 
 batch_size = 1
@@ -104,6 +107,7 @@ for t in irl_types:
 
 # Read data
 img = torch.from_numpy(np.load(filename))
+img = img / img.max().item()
 h, w = img.shape
 img = img.view(1, 1, h, w)
 img = img.to(config.device)
@@ -121,6 +125,23 @@ mask[..., ::sparsity] = 1
 
 # Dimension Reducing (DR)
 sinogram = radon.A(img)
+
+# noise level
+# sigma = 1
+# guassian_noise_1 = torch.rand_like(sinogram, device=sinogram.device) * sigma
+# sinogram = sinogram + guassian_noise_1
+
+# possion noise no scale
+# sinogram_full = radon_all.A(img)
+# data = sinogram_full
+# mu_water = 0.02
+# photons_per_pixel = 1e4
+# proj_data = np.exp(-data.cpu() * mu_water)
+# proj_data = np.random.poisson((proj_data* photons_per_pixel*255.0)/255.0).astype('float32')
+# proj_data = np.maximum(proj_data, 1) / photons_per_pixel
+# proj_data = np.log(proj_data) * (-1 / mu_water)
+# sinogram = torch.from_numpy(proj_data)
+
 
 # Dimension Preserving (DP)
 sinogram_full = radon_all.A(img) * mask
@@ -140,7 +161,7 @@ if solver == 'MCG':
                                                       radon=radon,
                                                       radon_all=radon_all,
                                                       weight=0.1,
-                                                      save_progress=False,
+                                                      save_progress=True,
                                                       save_root=save_root,
                                                       lamb_schedule=lamb_schedule,
                                                       mask=mask)
@@ -157,9 +178,54 @@ elif solver == 'song':
                                                         save_root=save_root,
                                                         denoise=True,
                                                         radon=radon_all,
-                                                        lamb=0.7)
+                                                        lamb=0.841,
+                                                        freq=freq)
     x = pc_song(score_model, scaler(img), mask, measurement=sinogram_full)
+elif solver == 'PS':
+    pc_PS = controllable_generation.get_pc_radon_PS(sde,
+                                                      predictor, corrector,
+                                                      inverse_scaler,
+                                                      snr=snr,
+                                                      n_steps=n_steps,
+                                                      probability_flow=probability_flow,
+                                                      continuous=config.training.continuous,
+                                                      denoise=True,
+                                                      radon=radon,
+                                                      radon_all=radon_all,
+                                                      weight=0.1,
+                                                      save_progress=True,
+                                                      save_root=save_root,
+                                                      lamb_schedule=lamb_schedule,
+                                                      mask=mask)
+    x = pc_PS(score_model, scaler(img), measurement=sinogram)
 
 # Recon
 plt.imsave(str(save_root / 'recon' / f'{str(idx).zfill(4)}.png'), clear(x), cmap='gray')
 plt.imsave(str(save_root / 'recon' / f'{str(idx).zfill(4)}_clip.png'), np.clip(clear(x), 0.1, 1.0), cmap='gray')
+
+import pytorch_ssim
+import cv2
+import math 
+
+def psnr(img1, img2):
+   mse = np.mean( (img1/255. - img2/255.) ** 2 )
+   if mse < 1.0e-10:
+      return 100
+   PIXEL_MAX = 1
+   return 20 * math.log10(PIXEL_MAX / math.sqrt(mse))
+
+gt = cv2.imread(str(save_root / 'label' / f'{str(idx).zfill(4)}_clip.png'))
+img= cv2.imread(str(save_root / 'recon' / f'{str(idx).zfill(4)}_clip.png'))
+input= cv2.imread(str(save_root / 'input' / 'FBP.png'))
+print('PSNR = ',psnr(gt,img))
+print('PSNR_ori = ',psnr(gt,input))
+img1 = gt.astype(np.float32)/255
+img2 = img.astype(np.float32)/255
+img3 = input.astype(np.float32)/255
+
+img1 = torch.tensor(img1).permute((2,0,1)).unsqueeze(0)
+img2 = torch.tensor(img2).permute((2,0,1)).unsqueeze(0)
+img3 = torch.tensor(img3).permute((2,0,1)).unsqueeze(0)
+
+print('SSIM = ',pytorch_ssim.ssim(img1, img2))
+print('SSIM_ori = ',pytorch_ssim.ssim(img1, img3))
